@@ -30,6 +30,7 @@ The launch scripts create a local `.venv`, install dependencies from `requiremen
 
 - `↑` / `↓` - move through the list
 - `Enter` - open a folder or select an archive
+- `../` - first list item inside any folder, moves up one level
 - `Space` - select the current folder
 - `Backspace` - go up one level
 - `Home` - return to the disks/roots screen

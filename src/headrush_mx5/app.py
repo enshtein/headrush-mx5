@@ -21,7 +21,10 @@ from headrush_mx5.browser import (
 
 class BrowserListItem(ListItem):
     def __init__(self, entry: BrowserEntry) -> None:
-        icon = "[DIR]" if entry.is_directory else "[ARC]"
+        if entry.is_parent_link:
+            icon = "[UP]"
+        else:
+            icon = "[DIR]" if entry.is_directory else "[ARC]"
         label = Label(f"{icon} {entry.label}")
         super().__init__(label)
         self.entry = entry
@@ -121,6 +124,9 @@ class PresetSourceBrowser(App[Path | None]):
         if not isinstance(item, BrowserListItem):
             return
         entry = item.entry
+        if entry.is_parent_link:
+            self.action_go_parent()
+            return
         if entry.is_directory:
             self.current_path = entry.path
             self._refresh_entries()
@@ -178,13 +184,13 @@ class PresetSourceBrowser(App[Path | None]):
         for entry in entries:
             list_view.append(BrowserListItem(entry))
 
-        dirs = sum(1 for entry in entries if entry.is_directory)
-        archives = len(entries) - dirs
+        dirs = sum(1 for entry in entries if entry.is_directory and not entry.is_parent_link)
+        archives = sum(1 for entry in entries if not entry.is_directory)
         if self.current_path is None:
             status_widget.update(f"Disks: {dirs}\n\nEnter: open disk\nHome: return here")
         else:
             status_widget.update(
-                f"Folders: {dirs}\nArchives: {archives}\n\nEnter: open/select archive\nSpace: select current folder"
+                f"Folders: {dirs}\nArchives: {archives}\n\nEnter: open/select archive\n../ or Backspace: go up\nSpace: select current folder"
             )
 
         if entries:

@@ -23,7 +23,9 @@ class BrowserTests(unittest.TestCase):
 
             entries = list_browser_entries(root)
 
-            self.assertEqual([entry.path.name for entry in entries], ["Rigs", "Pack.rar", "Pack.zip"])
+            self.assertEqual([entry.label for entry in entries], ["../", "Rigs", "Pack.rar", "Pack.zip"])
+            self.assertTrue(entries[0].is_parent_link)
+            self.assertEqual(entries[0].path, root)
 
     def test_list_root_entries_uses_posix_roots(self) -> None:
         fake_entries = [

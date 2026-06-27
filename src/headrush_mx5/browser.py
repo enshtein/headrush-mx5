@@ -15,6 +15,7 @@ class BrowserEntry:
     path: Path
     is_directory: bool
     display_name: str | None = None
+    is_parent_link: bool = False
 
     @property
     def is_selectable(self) -> bool:
@@ -46,13 +47,15 @@ def list_browser_entries(directory: Path) -> list[BrowserEntry]:
         if is_supported_archive(child):
             entries.append(BrowserEntry(path=child, is_directory=False))
 
-    return sorted(
+    sorted_entries = sorted(
         entries,
         key=lambda entry: (
             not entry.is_directory,
             entry.path.name.casefold(),
         ),
     )
+
+    return [BrowserEntry(path=directory, is_directory=True, display_name="../", is_parent_link=True), *sorted_entries]
 
 
 def list_root_entries() -> list[BrowserEntry]:
