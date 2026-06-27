@@ -1,1 +1,2 @@
 textual==8.2.7
+rarfile==4.2

@@ -1,11 +1,33 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
-from headrush_mx5.browser import BrowserEntry, default_start_path, list_browser_entries, list_root_entries
+from headrush_mx5.browser import (
+    ARCHIVE_ROOT,
+    ArchiveMember,
+    BrowserEntry,
+    analyze_headrush_archive,
+    analyze_headrush_folder,
+    default_start_path,
+    find_headrush_mount,
+    inspect_archive,
+    is_browsable_archive,
+    list_archive_entries,
+    list_browser_entries,
+    list_root_entries,
+)
+from headrush_mx5.app import load_browser_state, save_browser_state
+from headrush_mx5.transfer import (
+    TransferOptions,
+    build_transfer_package,
+    execute_transfer,
+    resolve_transfer_target,
+)
 
 
 class BrowserTests(unittest.TestCase):
@@ -47,6 +69,366 @@ class BrowserTests(unittest.TestCase):
                 entries = list_root_entries()
 
         self.assertEqual([entry.label for entry in entries], ["C:\\"])
+
+    def test_find_headrush_mount_uses_posix_volume_name(self) -> None:
+        fake_entries = [
+            BrowserEntry(path=Path("/"), is_directory=True, display_name="System /"),
+            BrowserEntry(path=Path("/Volumes/HeadRush"), is_directory=True, display_name="/Volumes/HeadRush"),
+        ]
+
+        with patch("headrush_mx5.browser.os.name", "posix"):
+            with patch("headrush_mx5.browser._posix_roots", return_value=fake_entries):
+                mount = find_headrush_mount()
+
+        self.assertEqual(mount, Path("/Volumes/HeadRush"))
+
+    def test_find_headrush_mount_uses_windows_volume_label(self) -> None:
+        fake_entries = [
+            BrowserEntry(path=Path("D:\\"), is_directory=True, display_name="D:\\"),
+            BrowserEntry(path=Path("E:\\"), is_directory=True, display_name="E:\\"),
+        ]
+
+        with patch("headrush_mx5.browser.os.name", "nt"):
+            with patch("headrush_mx5.browser._windows_roots", return_value=fake_entries):
+                with patch("headrush_mx5.browser._get_windows_volume_label", side_effect=["Data", "HeadRush"]):
+                    mount = find_headrush_mount()
+
+        self.assertEqual(str(mount), "E:\\")
+
+    def test_analyze_headrush_folder_collects_presets_and_irs_recursively(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Rigs").mkdir()
+            (root / "IRs").mkdir()
+            (root / "__MACOSX").mkdir()
+            (root / "Rigs" / "Lead.rig").write_text("rig", encoding="utf-8")
+            (root / "Rigs" / "Rhythm.RIG").write_text("rig", encoding="utf-8")
+            (root / "IRs" / "Cab.wav").write_text("wav", encoding="utf-8")
+            (root / "__MACOSX" / "Ghost.wav").write_text("wav", encoding="utf-8")
+            (root / "notes.txt").write_text("ignore", encoding="utf-8")
+
+            analysis = analyze_headrush_folder(root)
+
+            self.assertEqual(analysis.presets, ("Rigs/Lead.rig", "Rigs/Rhythm.RIG"))
+            self.assertEqual(analysis.irs, ("IRs/Cab.wav",))
+            self.assertTrue(analysis.has_headrush_content)
+
+    def test_analyze_headrush_folder_handles_non_headrush_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "README.txt").write_text("ignore", encoding="utf-8")
+
+            analysis = analyze_headrush_folder(root)
+
+            self.assertEqual(analysis.presets, ())
+            self.assertEqual(analysis.irs, ())
+            self.assertFalse(analysis.has_headrush_content)
+            self.assertIsNone(analysis.note)
+
+    def test_is_browsable_archive_only_accepts_zip_and_rar(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            zip_path = root / "Pack.zip"
+            rar_path = root / "Pack.rar"
+            seven_zip_path = root / "Pack.7z"
+            zip_path.write_text("zip", encoding="utf-8")
+            rar_path.write_text("rar", encoding="utf-8")
+            seven_zip_path.write_text("7z", encoding="utf-8")
+
+            self.assertTrue(is_browsable_archive(zip_path))
+            self.assertTrue(is_browsable_archive(rar_path))
+            self.assertFalse(is_browsable_archive(seven_zip_path))
+
+    def test_list_archive_entries_adds_parent_and_children(self) -> None:
+        members = (
+            ArchiveMember(path=PurePosixPath("Rigs/Lead.rig"), is_directory=False),
+            ArchiveMember(path=PurePosixPath("IRs/Cab.wav"), is_directory=False),
+            ArchiveMember(path=PurePosixPath("README.rtf"), is_directory=False),
+        )
+
+        entries = list_archive_entries(ARCHIVE_ROOT, members)
+
+        self.assertEqual([entry.label for entry in entries], ["../", "IRs", "Rigs", "README.rtf"])
+        self.assertTrue(entries[0].is_parent_link)
+
+    def test_analyze_headrush_archive_collects_rigs_and_wavs(self) -> None:
+        members = (
+            ArchiveMember(path=PurePosixPath("Rigs/Lead.rig"), is_directory=False),
+            ArchiveMember(path=PurePosixPath("IRs/Cab.wav"), is_directory=False),
+            ArchiveMember(path=PurePosixPath("README.rtf"), is_directory=False),
+        )
+
+        analysis = analyze_headrush_archive(members)
+
+        self.assertEqual(analysis.presets, ("Rigs/Lead.rig",))
+        self.assertEqual(analysis.irs, ("IRs/Cab.wav",))
+        self.assertTrue(analysis.has_headrush_content)
+
+    def test_inspect_archive_reads_zip_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path = root / "Pack.zip"
+
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("Rigs/Lead.rig", "rig")
+                archive.writestr("IRs/Cab.wav", "wav")
+                archive.writestr("Docs/README.rtf", "doc")
+
+            entries, analysis = inspect_archive(archive_path, ARCHIVE_ROOT)
+
+            self.assertEqual([entry.label for entry in entries], ["../", "Docs", "IRs", "Rigs"])
+            self.assertEqual(analysis.presets, ("Rigs/Lead.rig",))
+            self.assertEqual(analysis.irs, ("IRs/Cab.wav",))
+
+    def test_analyze_headrush_folder_skips_large_generic_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "deep" / "generic" / "folder"
+            target.mkdir(parents=True)
+
+            for index in range(45):
+                (target / f"child-{index}").mkdir()
+
+            analysis = analyze_headrush_folder(target)
+
+            self.assertFalse(analysis.has_headrush_content)
+            self.assertEqual(analysis.note, "Open a more specific folder to inspect HeadRush files.")
+
+    def test_save_and_load_browser_state_restores_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            browser_path = project_root / "Presets"
+            browser_path.mkdir()
+
+            save_browser_state(
+                project_root=project_root,
+                selected_path=None,
+                browser_path=browser_path,
+                archive_path=None,
+                archive_dir=ARCHIVE_ROOT,
+            )
+
+            restored_path, restored_archive_path, restored_archive_dir = load_browser_state(project_root)
+
+            self.assertEqual(restored_path, browser_path.resolve())
+            self.assertIsNone(restored_archive_path)
+            self.assertEqual(restored_archive_dir, ARCHIVE_ROOT)
+
+    def test_save_and_load_browser_state_restores_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            browser_path = project_root / "Downloads"
+            browser_path.mkdir()
+            archive_path = browser_path / "Pack.zip"
+            archive_path.write_text("zip", encoding="utf-8")
+
+            save_browser_state(
+                project_root=project_root,
+                selected_path=archive_path,
+                browser_path=browser_path,
+                archive_path=archive_path,
+                archive_dir=PurePosixPath("Rigs"),
+            )
+
+            restored_path, restored_archive_path, restored_archive_dir = load_browser_state(project_root)
+
+            self.assertEqual(restored_path, browser_path.resolve())
+            self.assertEqual(restored_archive_path, archive_path.resolve())
+            self.assertEqual(restored_archive_dir, PurePosixPath("Rigs"))
+
+    def test_load_browser_state_falls_back_when_saved_paths_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            state_path = project_root / ".headrush-mx5-state.json"
+            state_path.write_text(
+                '{"browser_path": "/missing/folder", "archive_path": "/missing/archive.zip", "archive_dir": "Rigs"}',
+                encoding="utf-8",
+            )
+
+            restored_path, restored_archive_path, restored_archive_dir = load_browser_state(project_root)
+
+            self.assertIsNone(restored_path)
+            self.assertIsNone(restored_archive_path)
+            self.assertEqual(restored_archive_dir, ARCHIVE_ROOT)
+
+    def test_resolve_transfer_target_prefers_connected_device(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            local_headrush = project_root / "HeadRush"
+            (local_headrush / "Rigs").mkdir(parents=True)
+            (local_headrush / "Setlists").mkdir()
+            connected = project_root / "MountedHeadRush"
+            (connected / "Rigs").mkdir(parents=True)
+            (connected / "Setlists").mkdir()
+
+            target = resolve_transfer_target(project_root, connected)
+
+            self.assertEqual(target.root, connected)
+            self.assertEqual(target.kind, "device")
+
+    def test_execute_transfer_copies_rigs_irs_and_setlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Bon Jovi Pack"
+            (source / "Rigs").mkdir(parents=True)
+            (source / "IRs").mkdir()
+            rig_path = source / "Rigs" / "Lead.rig"
+            ir_path = source / "IRs" / "Cab.wav"
+            ir_path.write_text("wav-data", encoding="utf-8")
+            rig_path.write_text(
+                json.dumps(
+                    {
+                        "author": "UserName",
+                        "color": 9,
+                        "content": json.dumps(
+                            {
+                                "data": {
+                                    "Patch": {
+                                        "children": {
+                                            "Rig": {"children": {"PresetName": {"string": "Lead"}}},
+                                            "IR": {"children": {"IR": {"string": "[directory]([USER])[name](Cab)"}}},
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                        "created_at": 1,
+                        "id": "old-id",
+                        "order": 1,
+                        "prog_num": -1,
+                        "readonly": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            target_root = root / "HeadRush"
+            (target_root / "Rigs").mkdir(parents=True)
+            (target_root / "Setlists").mkdir()
+            (target_root / "Impulse Responses" / "USER").mkdir(parents=True)
+            (target_root / "Rigs" / "270 +WDW-HARMONY.rig").write_text('{"order": 270}', encoding="utf-8")
+
+            package = build_transfer_package(source, None, ARCHIVE_ROOT)
+            result = execute_transfer(
+                package,
+                TransferOptions(copy_rigs=True, copy_irs=True, create_setlist=True, setlist_name="Bon Jovi Pack"),
+                resolve_transfer_target(root, None),
+            )
+
+            self.assertEqual(len(result.copied_rigs), 1)
+            self.assertEqual(len(result.copied_irs), 1)
+            self.assertIsNotNone(result.setlist_path)
+            copied_rig = result.copied_rigs[0]
+            copied_rig_payload = json.loads(copied_rig.target_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(copied_rig_payload["id"], "old-id")
+            self.assertIn("300 ", copied_rig.target_path.name)
+            self.assertIn("Bon Jovi Pack", copied_rig.target_path.name)
+            self.assertEqual(result.copied_irs[0].name, "Cab.wav")
+            self.assertIn("[name](Cab)", copied_rig_payload["content"])
+
+            setlist_payload = json.loads(result.setlist_path.read_text(encoding="utf-8"))
+            self.assertEqual(setlist_payload["rig_names"], [copied_rig.rig_name])
+            self.assertEqual(setlist_payload["rigs"], [copied_rig.rig_id])
+
+    def test_execute_transfer_skips_existing_ir_with_same_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Pack"
+            (source / "Rigs").mkdir(parents=True)
+            (source / "IRs").mkdir()
+            (source / "IRs" / "Cab.wav").write_text("new-wav", encoding="utf-8")
+            (source / "Rigs" / "Lead.rig").write_text(
+                json.dumps(
+                    {
+                        "author": "UserName",
+                        "color": 9,
+                        "content": json.dumps(
+                            {
+                                "data": {
+                                    "Patch": {
+                                        "children": {
+                                            "Rig": {"children": {"PresetName": {"string": "Lead"}}},
+                                            "IR": {"children": {"IR": {"string": "[directory]([USER])[name](Cab)"}}},
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                        "created_at": 1,
+                        "id": "old-id",
+                        "order": 1,
+                        "prog_num": -1,
+                        "readonly": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            target_root = root / "HeadRush"
+            (target_root / "Rigs").mkdir(parents=True)
+            (target_root / "Setlists").mkdir()
+            existing_ir_dir = target_root / "Impulse Responses" / "USER"
+            existing_ir_dir.mkdir(parents=True)
+            existing_ir = existing_ir_dir / "Cab.wav"
+            existing_ir.write_text("existing-wav", encoding="utf-8")
+
+            package = build_transfer_package(source, None, ARCHIVE_ROOT)
+            result = execute_transfer(
+                package,
+                TransferOptions(copy_rigs=True, copy_irs=True, create_setlist=False, setlist_name="Pack"),
+                resolve_transfer_target(root, None),
+            )
+
+            self.assertEqual(result.copied_irs, ())
+            self.assertEqual(existing_ir.read_text(encoding="utf-8"), "existing-wav")
+
+    def test_execute_transfer_fails_when_required_ir_is_missing_and_ir_copy_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Pack"
+            (source / "Rigs").mkdir(parents=True)
+            (source / "IRs").mkdir()
+            (source / "IRs" / "Cab.wav").write_text("wav-data", encoding="utf-8")
+            (source / "Rigs" / "Lead.rig").write_text(
+                json.dumps(
+                    {
+                        "author": "UserName",
+                        "color": 9,
+                        "content": json.dumps(
+                            {
+                                "data": {
+                                    "Patch": {
+                                        "children": {
+                                            "Rig": {"children": {"PresetName": {"string": "Lead"}}},
+                                            "IR": {"children": {"IR": {"string": "[directory]([USER])[name](Cab)"}}},
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                        "created_at": 1,
+                        "id": "old-id",
+                        "order": 1,
+                        "prog_num": -1,
+                        "readonly": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            target_root = root / "HeadRush"
+            (target_root / "Rigs").mkdir(parents=True)
+            (target_root / "Setlists").mkdir()
+            (target_root / "Impulse Responses" / "USER").mkdir(parents=True)
+
+            package = build_transfer_package(source, None, ARCHIVE_ROOT)
+
+            with self.assertRaisesRegex(ValueError, "Missing IR files"):
+                execute_transfer(
+                    package,
+                    TransferOptions(copy_rigs=True, copy_irs=False, create_setlist=False, setlist_name="Pack"),
+                    resolve_transfer_target(root, None),
+                )
 
 
 if __name__ == "__main__":
