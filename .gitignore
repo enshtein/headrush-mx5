@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+.idea/
+
+HeadRush/
+Presets/
+MX5_User_Guide_v1.5.pdf
+
+.headrush-mx5-state.json
