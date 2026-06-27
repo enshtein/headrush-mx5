@@ -10,13 +10,19 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-from headrush_mx5.browser import BrowserEntry, STATE_FILE_NAME, default_start_path, list_browser_entries
+from headrush_mx5.browser import (
+    BrowserEntry,
+    STATE_FILE_NAME,
+    default_start_path,
+    list_browser_entries,
+    list_root_entries,
+)
 
 
 class BrowserListItem(ListItem):
     def __init__(self, entry: BrowserEntry) -> None:
         icon = "[DIR]" if entry.is_directory else "[ARC]"
-        label = Label(f"{icon} {entry.path.name}")
+        label = Label(f"{icon} {entry.label}")
         super().__init__(label)
         self.entry = entry
 
@@ -80,16 +86,16 @@ class PresetSourceBrowser(App[Path | None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("backspace", "go_parent", "Up"),
-        Binding("home", "go_home", "Home"),
+        Binding("home", "go_roots", "Disks"),
         Binding("space", "select_current_directory", "Select Folder"),
         Binding("r", "refresh", "Refresh"),
     ]
 
-    current_path = reactive(Path.home())
+    current_path = reactive(None)
 
-    def __init__(self, start_path: Path) -> None:
+    def __init__(self, start_path: Path | None) -> None:
         super().__init__()
-        self.current_path = start_path.resolve()
+        self.current_path = start_path.resolve() if start_path is not None else None
         self.selected_path: Path | None = None
 
     def compose(self) -> ComposeResult:
@@ -128,16 +134,22 @@ class PresetSourceBrowser(App[Path | None]):
             self.action_go_parent()
 
     def action_go_parent(self) -> None:
+        if self.current_path is None:
+            return
         parent = self.current_path.parent
-        if parent != self.current_path:
+        if parent == self.current_path:
+            self.current_path = None
+        else:
             self.current_path = parent
-            self._refresh_entries()
+        self._refresh_entries()
 
-    def action_go_home(self) -> None:
-        self.current_path = Path.home()
+    def action_go_roots(self) -> None:
+        self.current_path = None
         self._refresh_entries()
 
     def action_select_current_directory(self) -> None:
+        if self.current_path is None:
+            return
         self._finish_with_selection(self.current_path)
 
     def action_refresh(self) -> None:
@@ -148,16 +160,19 @@ class PresetSourceBrowser(App[Path | None]):
         status_widget = self.query_one("#status", Static)
         list_view = self.query_one("#entries", ListView)
 
-        path_widget.update(str(self.current_path))
-
-        try:
-            entries = list_browser_entries(self.current_path)
-        except PermissionError:
-            status_widget.update("Permission denied for this folder.")
-            return
-        except FileNotFoundError:
-            status_widget.update("Folder no longer exists.")
-            return
+        if self.current_path is None:
+            path_widget.update("Computer")
+            entries = list_root_entries()
+        else:
+            path_widget.update(str(self.current_path))
+            try:
+                entries = list_browser_entries(self.current_path)
+            except PermissionError:
+                status_widget.update("Permission denied for this folder.")
+                return
+            except FileNotFoundError:
+                status_widget.update("Folder no longer exists.")
+                return
 
         list_view.clear()
         for entry in entries:
@@ -165,9 +180,12 @@ class PresetSourceBrowser(App[Path | None]):
 
         dirs = sum(1 for entry in entries if entry.is_directory)
         archives = len(entries) - dirs
-        status_widget.update(
-            f"Folders: {dirs}\nArchives: {archives}\n\nEnter: open/select archive\nSpace: select current folder"
-        )
+        if self.current_path is None:
+            status_widget.update(f"Disks: {dirs}\n\nEnter: open disk\nHome: return here")
+        else:
+            status_widget.update(
+                f"Folders: {dirs}\nArchives: {archives}\n\nEnter: open/select archive\nSpace: select current folder"
+            )
 
         if entries:
             list_view.index = 0
@@ -185,7 +203,7 @@ def save_state(project_root: Path, selected_path: Path) -> None:
 
 def main() -> int:
     project_root = Path.cwd()
-    start_path = default_start_path(project_root)
+    start_path = default_start_path()
     app = PresetSourceBrowser(start_path=start_path)
     selected_path = app.run()
 
