@@ -12,7 +12,9 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import ProgressBar
 
+from headrush_mx5.backup import backup_headrush_device
 from headrush_mx5.browser import (
     FolderAnalysis,
     BrowserEntry,
@@ -76,6 +78,20 @@ class TransferOptionsModal(ModalScreen[TransferModalResult | None]):
         margin: 0 0 1 0;
     }
 
+    Button {
+        pointer: pointer;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: #1f4f29;
+    }
+
+    Button:focus {
+        border: tall #79e59a;
+        background: #183d1f;
+    }
+
     #transfer_buttons {
         align: right middle;
         margin-top: 1;
@@ -101,7 +117,7 @@ class TransferOptionsModal(ModalScreen[TransferModalResult | None]):
             yield Input(value=default_setlist_name, placeholder="Setlist name", id="setlist_name")
             yield Static(
                 "RIGs will be saved into HeadRush/Rigs with safe numbering and pack-prefixed names.\n"
-                "IRs will be saved into HeadRush/Impulse Responses/USER.",
+                "IRs keep their source folder when present, otherwise they are saved into HeadRush/Impulse Responses/USER.",
                 classes="modal_text",
             )
             with Horizontal(id="transfer_buttons"):
@@ -180,6 +196,20 @@ class TransferCompleteModal(ModalScreen[None]):
         padding-bottom: 1;
     }
 
+    Button {
+        pointer: pointer;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: #1f4f29;
+    }
+
+    Button:focus {
+        border: tall #79e59a;
+        background: #183d1f;
+    }
+
     #complete_buttons {
         align: right middle;
         margin-top: 1;
@@ -226,6 +256,208 @@ class TransferCompleteModal(ModalScreen[None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class EjectDeviceModal(ModalScreen[None]):
+    CSS = """
+    EjectDeviceModal {
+        align: center middle;
+    }
+
+    #eject_modal {
+        width: 72;
+        max-width: 90%;
+        height: auto;
+        padding: 1 2;
+        border: round #4f6f52;
+        background: #111111;
+    }
+
+    .modal_title {
+        text-style: bold;
+        padding-bottom: 1;
+    }
+
+    .modal_text {
+        color: #c8d7c9;
+        padding-bottom: 1;
+    }
+
+    Button {
+        pointer: pointer;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: #1f4f29;
+    }
+
+    Button:focus {
+        border: tall #79e59a;
+        background: #183d1f;
+    }
+
+    #eject_buttons {
+        align: right middle;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "close", "Close")]
+
+    def __init__(self, target: TransferTarget) -> None:
+        super().__init__()
+        self.target = target
+        self.message_lines = [
+            f"Target: {self.target.label}",
+            "Do not forget to press Sync on the MX-5 to finish the synchronization.",
+        ]
+
+    def compose(self) -> ComposeResult:
+        with Container(id="eject_modal"):
+            yield Static("Eject HeadRush Device", classes="modal_title")
+            yield Static("\n".join(self.message_lines), classes="modal_text", id="eject_text")
+            with Horizontal(id="eject_buttons"):
+                yield Button("Eject the HeadRush device on your computer", id="eject_device", variant="warning")
+                yield Button("Close", id="close_eject", variant="success")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close_eject":
+            self.dismiss(None)
+            return
+        if event.button.id != "eject_device":
+            return
+
+        success, message = eject_transfer_target(self.target)
+        self.message_lines.append(message)
+        self.query_one("#eject_text", Static).update("\n".join(self.message_lines))
+        event.button.disabled = success
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class BackupProgressModal(ModalScreen[None]):
+    CSS = """
+    BackupProgressModal {
+        align: center middle;
+    }
+
+    #backup_modal {
+        width: 72;
+        max-width: 90%;
+        height: auto;
+        padding: 1 2;
+        border: round #4f6f52;
+        background: #111111;
+    }
+
+    .modal_title {
+        text-style: bold;
+        padding-bottom: 1;
+    }
+
+    .modal_text {
+        color: #c8d7c9;
+        padding-bottom: 1;
+    }
+
+    #backup_progress {
+        margin: 1 0;
+    }
+
+    Button {
+        pointer: pointer;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: #1f4f29;
+    }
+
+    Button:focus {
+        border: tall #79e59a;
+        background: #183d1f;
+    }
+
+    #backup_buttons {
+        align: right middle;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, source_root: Path, destination_root: Path) -> None:
+        super().__init__()
+        self.source_root = source_root
+        self.destination_root = destination_root
+        self._copied_files = 0
+
+    def compose(self) -> ComposeResult:
+        with Container(id="backup_modal"):
+            yield Static("Backup HeadRush Device", classes="modal_title")
+            yield Static(f"Source: {self.source_root}", classes="modal_text")
+            yield Static(f"Destination: {self.destination_root}", classes="modal_text")
+            yield Static("Preparing backup...", id="backup_status", classes="modal_text")
+            yield ProgressBar(total=1, id="backup_progress")
+            yield Static("", id="backup_detail", classes="modal_text")
+            with Horizontal(id="backup_buttons"):
+                yield Button("OK", id="close_backup", variant="success", disabled=True)
+
+    def on_mount(self) -> None:
+        self.run_worker(self._run_backup, thread=True, exclusive=True, exit_on_error=False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close_backup":
+            self.dismiss(None)
+
+    def _run_backup(self) -> None:
+        try:
+            copied_files = backup_headrush_device(
+                self.source_root,
+                self.destination_root,
+                progress_callback=self._emit_progress,
+            )
+        except Exception as exc:
+            self.app.call_from_thread(self._finish_backup_error, str(exc))
+            return
+
+        self.app.call_from_thread(self._finish_backup_success, copied_files)
+
+    def _emit_progress(self, copied_files: int, total_files: int, relative_path: str) -> None:
+        self.app.call_from_thread(self._update_progress, copied_files, total_files, relative_path)
+
+    def _update_progress(self, copied_files: int, total_files: int, relative_path: str) -> None:
+        self._copied_files = copied_files
+        progress_bar = self.query_one("#backup_progress", ProgressBar)
+        status = self.query_one("#backup_status", Static)
+        detail = self.query_one("#backup_detail", Static)
+        progress_bar.update(total=max(total_files, 1), progress=copied_files)
+        if total_files == 0:
+            status.update("No files were found on the connected HeadRush device.")
+            detail.update("")
+        else:
+            status.update(f"Backing up files: {copied_files}/{total_files}")
+            detail.update(relative_path)
+
+    def _finish_backup_success(self, copied_files: int) -> None:
+        status = self.query_one("#backup_status", Static)
+        detail = self.query_one("#backup_detail", Static)
+        close_button = self.query_one("#close_backup", Button)
+        if copied_files == 0:
+            status.update("Backup completed. The connected HeadRush device did not contain any files.")
+            detail.update("")
+        else:
+            status.update(f"Backup completed successfully. Copied files: {copied_files}")
+            detail.update("The local HeadRush project folder is now updated.")
+        close_button.disabled = False
+
+    def _finish_backup_error(self, message: str) -> None:
+        status = self.query_one("#backup_status", Static)
+        detail = self.query_one("#backup_detail", Static)
+        close_button = self.query_one("#close_backup", Button)
+        status.update("Backup failed.")
+        detail.update(message)
+        close_button.disabled = False
 
 
 class BrowserListItem(ListItem):
@@ -285,30 +517,6 @@ class PresetSourceBrowser(App[Path | None]):
         text-style: bold;
     }
 
-    #footer_status_bar {
-        height: 1;
-        background: #0d0f3f;
-    }
-
-    #footer_status_spacer {
-        width: 1fr;
-    }
-
-    #device_footer_status {
-        height: 1;
-        padding: 0 1;
-        background: #0d0f3f;
-        color: #96a397;
-        text-style: bold;
-    }
-
-    #device_footer_status.-connected {
-        color: #79e59a;
-    }
-
-    #device_footer_status.-disconnected {
-        color: #96a397;
-    }
     #status {
         padding-top: 1;
         color: #c8d7c9;
@@ -340,6 +548,24 @@ class PresetSourceBrowser(App[Path | None]):
         width: 100%;
     }
 
+    .device-action-hidden {
+        display: none;
+    }
+
+    Button {
+        pointer: pointer;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: #1f4f29;
+    }
+
+    Button:focus {
+        border: tall #79e59a;
+        background: #183d1f;
+    }
+
     ListView {
         height: 1fr;
         border: round #355e3b;
@@ -361,6 +587,8 @@ class PresetSourceBrowser(App[Path | None]):
         Binding("backspace", "go_parent", "Up"),
         Binding("home", "go_roots", "Disks"),
         Binding("space", "select_source", "Select Source"),
+        Binding("b", "backup_device", "Backup: HeadRush MX-5"),
+        Binding("e", "eject_device", "Eject: HeadRush MX-5"),
         Binding("r", "refresh", "Refresh"),
     ]
 
@@ -400,13 +628,11 @@ class PresetSourceBrowser(App[Path | None]):
                 with Horizontal(id="browser_header"):
                     yield Static("", id="path")
                 yield ListView(id="entries")
-        with Horizontal(id="footer_status_bar"):
-            yield Static("", id="footer_status_spacer")
-            yield Static("", id="device_footer_status", classes="-disconnected")
         yield Footer()
 
     def on_mount(self) -> None:
         self._refresh_headrush_status()
+        self._refresh_device_actions()
         self.set_interval(2.0, self._poll_system_state)
         self._refresh_entries()
 
@@ -479,6 +705,17 @@ class PresetSourceBrowser(App[Path | None]):
     def action_refresh(self) -> None:
         self._refresh_headrush_status()
         self._refresh_entries()
+
+    def action_backup_device(self) -> None:
+        self._start_backup()
+
+    def action_eject_device(self) -> None:
+        if self.headrush_mount is None:
+            return
+        target = resolve_transfer_target(Path.cwd(), self.headrush_mount)
+        if target is None or target.kind != "device":
+            return
+        self.push_screen(EjectDeviceModal(target))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "open_transfer":
@@ -645,21 +882,22 @@ class PresetSourceBrowser(App[Path | None]):
     def _poll_system_state(self) -> None:
         previous_mount = self.headrush_mount
         self._refresh_headrush_status()
+        self._refresh_device_actions()
         if previous_mount != self.headrush_mount and self.current_path is None and self.current_archive_path is None:
             self._refresh_entries()
 
     def _refresh_headrush_status(self) -> None:
+        previous_mount = self.headrush_mount
         self.headrush_mount = find_headrush_mount()
-        device_status = self.query_one("#device_footer_status", Static)
+        if previous_mount != self.headrush_mount:
+            self.refresh_bindings()
 
-        if self.headrush_mount is not None:
-            device_status.remove_class("-disconnected")
-            device_status.add_class("-connected")
-            device_status.update("● HeadRush MX-5 USB Transfer Sync")
+    def _refresh_device_actions(self) -> None:
+        transfer_button = self.query_one("#open_transfer", Button)
+        if self.headrush_mount is None:
+            transfer_button.add_class("device-action-hidden")
         else:
-            device_status.remove_class("-connected")
-            device_status.add_class("-disconnected")
-            device_status.update("○ HeadRush MX-5 USB Transfer Sync")
+            transfer_button.remove_class("device-action-hidden")
 
     def _handle_transfer_options(
         self,
@@ -680,6 +918,19 @@ class PresetSourceBrowser(App[Path | None]):
             return
 
         self.push_screen(TransferCompleteModal(transfer_result))
+
+    def _start_backup(self) -> None:
+        if self.headrush_mount is None:
+            self.notify("The HeadRush device is not connected.", severity="warning")
+            return
+
+        destination_root = Path.cwd() / "HeadRush"
+        self.push_screen(BackupProgressModal(self.headrush_mount, destination_root))
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action in {"backup_device", "eject_device"}:
+            return self.headrush_mount is not None
+        return super().check_action(action, parameters)
 
 
 def save_state(project_root: Path, selected_path: Path) -> None:

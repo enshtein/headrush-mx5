@@ -10,7 +10,9 @@ The application can:
 - analyze `.rig` presets and `.wav` impulse responses;
 - transfer presets and IRs to a HeadRush MX-5 target structure;
 - create a `.setlist` file for imported presets;
-- detect a mounted `HeadRush` USB Transfer volume.
+- detect a mounted `HeadRush` USB Transfer volume;
+- back up a connected HeadRush device into the local project `HeadRush/` folder;
+- eject the connected device and remind you to press `Sync` on the hardware.
 
 ## Quick Start
 
@@ -38,8 +40,12 @@ The launch scripts create a local `.venv`, install dependencies from `requiremen
 - `Space` - select the current folder, or select the highlighted archive source
 - `Backspace` - go up one level
 - `Home` - return to the disks/roots screen
+- `b` - back up the connected HeadRush device
+- `e` - eject the connected HeadRush device
 - `r` - refresh the current view
 - `q` - quit
+
+The `Transfer`, `Backup`, and `Eject` actions are shown only when a `HeadRush` USB Transfer volume is connected.
 
 ## Workflow
 
@@ -62,13 +68,19 @@ The default setlist name is taken from the current folder or archive name.
 
 ![Transfer options modal](docs/images/transfer-options-modal.png)
 
-### 3. Finish the transfer
+### 3. Back up the connected device
 
-After the copy is complete, the application shows the transfer result and can optionally eject the connected HeadRush device.
+Use `Backup: HeadRush MX-5` from the footer to mirror the currently connected device into the local project `HeadRush/` folder.
 
-Do not forget to press `Sync` on the MX-5 after ejecting the device. This finalizes the synchronization on the hardware side.
+![Backup modal](docs/images/backup-modal.png)
 
-![Transfer complete modal](docs/images/transfer-complete-modal.png)
+### 4. Eject and sync
+
+When file transfer is finished, use `Eject: HeadRush MX-5` from the footer.
+
+Do not forget to press `Sync` on the MX-5 after ejecting the drive. This finalizes the synchronization on the hardware side.
+
+![Eject modal](docs/images/eject-modal.png)
 
 ## Transfer Rules
 
@@ -82,9 +94,11 @@ Do not forget to press `Sync` on the MX-5 after ejecting the device. This finali
 
 ### IR files
 
-- Target folder: `HeadRush/Impulse Responses/USER`
+- Target folder: `HeadRush/Impulse Responses`
+- IRs found in a named folder inside the source pack keep that folder name on the HeadRush target
+- IRs found at the source root are copied to `HeadRush/Impulse Responses/USER`
 - If an IR with the same name already exists on the HeadRush target, it is reused and not copied again
-- This keeps preset references stable and avoids unnecessary duplicates
+- Imported presets are rewritten to point at the final HeadRush IR folder and IR file name
 - If a preset depends on an IR that is missing on the target and IR copy is disabled, transfer stops with an error instead of creating a broken preset
 
 ### Setlists
@@ -98,7 +112,7 @@ Do not forget to press `Sync` on the MX-5 after ejecting the device. This finali
 - The app looks for a mounted volume named `HeadRush`
 - On macOS and Linux, it checks mounted volumes such as `/Volumes/HeadRush`
 - On Windows, it checks drive volume labels
-- The status line shows `HeadRush MX-5 USB Transfer Sync` when the device is available
+- When the device is connected, footer actions for `Transfer`, `Backup`, and `Eject` become available
 
 ## State Persistence
 

@@ -84,7 +84,7 @@ def analyze_headrush_folder(directory: Path) -> FolderAnalysis:
     scanned_files = 0
 
     for root, dirnames, filenames in os.walk(directory):
-        dirnames[:] = [dirname for dirname in dirnames if dirname not in IGNORED_NAMES]
+        dirnames[:] = [dirname for dirname in dirnames if not _is_ignored_name(dirname)]
         root_path = Path(root)
         relative_root = root_path.relative_to(directory)
 
@@ -93,7 +93,7 @@ def analyze_headrush_folder(directory: Path) -> FolderAnalysis:
             continue
 
         for filename in filenames:
-            if filename in IGNORED_NAMES:
+            if _is_ignored_name(filename):
                 continue
 
             scanned_files += 1
@@ -199,7 +199,7 @@ def analyze_headrush_archive(members: tuple[ArchiveMember, ...]) -> FolderAnalys
 def list_browser_entries(directory: Path) -> list[BrowserEntry]:
     entries: list[BrowserEntry] = []
     for child in directory.iterdir():
-        if child.name in IGNORED_NAMES:
+        if _is_ignored_name(child.name):
             continue
         if child.is_dir():
             entries.append(BrowserEntry(path=child, is_directory=True))
@@ -296,7 +296,7 @@ def _discover_mounts(parent: Path, depth: int) -> Iterable[Path]:
 
     discovered: list[Path] = []
     try:
-        children = [child for child in parent.iterdir() if child.is_dir() and child.name not in IGNORED_NAMES]
+        children = [child for child in parent.iterdir() if child.is_dir() and not _is_ignored_name(child.name)]
     except PermissionError:
         return []
 
@@ -310,7 +310,7 @@ def _discover_mounts(parent: Path, depth: int) -> Iterable[Path]:
 
 def _safe_list_directory(directory: Path) -> tuple[Path, ...]:
     try:
-        return tuple(child for child in directory.iterdir() if child.name not in IGNORED_NAMES)
+        return tuple(child for child in directory.iterdir() if not _is_ignored_name(child.name))
     except (PermissionError, FileNotFoundError, OSError):
         return ()
 
@@ -346,7 +346,7 @@ def _archive_member_from_name(filename: str, is_directory: bool) -> ArchiveMembe
         return None
 
     path = PurePosixPath(normalized)
-    if any(part in IGNORED_NAMES for part in path.parts):
+    if any(_is_ignored_name(part) for part in path.parts):
         return None
 
     return ArchiveMember(path=path, is_directory=is_directory)
@@ -358,3 +358,7 @@ def _is_archive_relative_to(path: PurePosixPath, parent: PurePosixPath) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _is_ignored_name(name: str) -> bool:
+    return name in IGNORED_NAMES or name.startswith("._")
