@@ -1,18 +1,18 @@
 # headrush-mx5
 
-Начальная версия консольного приложения для работы с пресет-паками Headrush MX-5.
+Initial console application for working with HeadRush MX-5 preset packs.
 
-Пока приложение решает первый этап: открывает полноэкранный консольный файловый браузер и позволяет выбрать:
+The current version covers the first step: it opens a fullscreen terminal file browser and lets the user choose:
 
-- диск или системный том для дальнейшей навигации;
-- папку с пресет-паком;
-- архив пресет-пака (`.zip`, `.rar`, `.7z`).
+- a disk or system volume for navigation;
+- a preset pack folder;
+- a preset pack archive (`.zip`, `.rar`, `.7z`).
 
-## Быстрый запуск
+## Quick Start
 
 ### macOS
 
-Открой `run-macos.command`.
+Open `run-macos.command`.
 
 ### Linux
 
@@ -22,30 +22,30 @@
 
 ### Windows
 
-Открой `run-windows.bat`.
+Open `run-windows.bat`.
 
-Скрипты сами создают локальное окружение `.venv`, ставят зависимости из `requirements.txt` и запускают приложение.
+The launch scripts create a local `.venv`, install dependencies from `requirements.txt`, and start the application.
 
-## Управление
+## Controls
 
-- `↑` / `↓` - перемещение по списку
-- `Enter` - открыть папку или выбрать архив
-- `Space` - выбрать текущую открытую папку
-- `Backspace` - перейти на уровень выше
-- `Home` - перейти к списку дисков/корней
-- `r` - обновить список
-- `q` - выход
+- `↑` / `↓` - move through the list
+- `Enter` - open a folder or select an archive
+- `Space` - select the current folder
+- `Backspace` - go up one level
+- `Home` - return to the disks/roots screen
+- `r` - refresh the current view
+- `q` - quit
 
-## Текущее поведение
+## Current Behavior
 
-- На старте приложение показывает список дисков/корней файловой системы.
-- На macOS и Linux в этом списке есть системный корень `/` и найденные смонтированные тома.
-- На Windows в этом списке отображаются доступные диски.
-- После выбора путь сохраняется в `.headrush-mx5-state.json`.
-- После выхода приложение печатает выбранный путь в консоль.
+- On startup, the app shows the filesystem roots screen.
+- On macOS and Linux, the screen includes the system root `/` and detected mounted volumes.
+- On Windows, the screen shows available drives.
+- After selection, the chosen path is saved to `.headrush-mx5-state.json`.
+- After exit, the selected path is printed to the terminal.
 
-## Структура репозитория
+## Repository Structure
 
-- `src/headrush_mx5/` - код приложения
-- `tests/` - проверки вспомогательной логики браузера
-- `run-macos.command`, `run-linux.sh`, `run-windows.bat` - стартовые скрипты
+- `src/headrush_mx5/` - application code
+- `tests/` - tests for the browser support logic
+- `run-macos.command`, `run-linux.sh`, `run-windows.bat` - startup scripts
