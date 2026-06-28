@@ -2,6 +2,13 @@
 
 Terminal application for browsing HeadRush MX-5 preset packs and transferring them to a connected HeadRush MX-5 device or to a local sample `HeadRush/` folder.
 
+## Downloads
+
+- [Download for macOS](https://github.com/enshtein/headrush-mx5/releases/download/v0.2.0/headrush-mx5-v0.2.0-macos.zip)
+- [Download for Linux](https://github.com/enshtein/headrush-mx5/releases/download/v0.2.0/headrush-mx5-v0.2.0-linux.zip)
+- [Download for Windows](https://github.com/enshtein/headrush-mx5/releases/download/v0.2.0/headrush-mx5-v0.2.0-windows.zip)
+- [All releases](https://github.com/enshtein/headrush-mx5/releases)
+
 The application can:
 
 - browse disks and mounted volumes;
