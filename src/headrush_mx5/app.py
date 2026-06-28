@@ -33,11 +33,40 @@ from headrush_mx5.transfer import (
     TransferPackage,
     TransferResult,
     TransferTarget,
+    TransferUndoOperation,
     build_transfer_package,
     eject_transfer_target,
     execute_transfer,
     resolve_transfer_target,
+    undo_transfer_operations,
 )
+
+TEXT_INPUT_NAVIGATION_KEYS = {
+    "left",
+    "right",
+    "home",
+    "end",
+    "ctrl+left",
+    "ctrl+right",
+    "ctrl+shift+left",
+    "ctrl+shift+right",
+    "alt+left",
+    "alt+right",
+    "alt+shift+left",
+    "alt+shift+right",
+    "meta+left",
+    "meta+right",
+    "meta+shift+left",
+    "meta+shift+right",
+    "shift+left",
+    "shift+right",
+    "shift+home",
+    "shift+end",
+}
+
+
+def _normalize_setlist_name(name: str) -> str:
+    return name.upper()
 
 
 @dataclass(frozen=True)
@@ -106,7 +135,7 @@ class TransferOptionsModal(ModalScreen[TransferModalResult | None]):
         self.target = target
 
     def compose(self) -> ComposeResult:
-        default_setlist_name = self.package.source_name
+        default_setlist_name = _normalize_setlist_name(self.package.source_name)
         with Container(id="transfer_modal"):
             yield Static("Transfer to HeadRush MX-5", classes="modal_title")
             yield Static(f"Source: {self.package.origin_label}", classes="modal_text")
@@ -131,6 +160,25 @@ class TransferOptionsModal(ModalScreen[TransferModalResult | None]):
         if event.checkbox.id == "copy_rigs":
             self._sync_form_state()
 
+    def on_key(self, event: events.Key) -> None:
+        if not self._editing_setlist_name(event):
+            return
+        event.stop()
+        prevent_default = getattr(event, "prevent_default", None)
+        if callable(prevent_default):
+            prevent_default()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "setlist_name":
+            return
+        normalized = _normalize_setlist_name(event.value)
+        if event.input.value == normalized:
+            return
+        cursor_position = getattr(event.input, "cursor_position", None)
+        event.input.value = normalized
+        if isinstance(cursor_position, int):
+            event.input.cursor_position = min(cursor_position, len(normalized))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel_transfer":
             self.dismiss(None)
@@ -141,7 +189,7 @@ class TransferOptionsModal(ModalScreen[TransferModalResult | None]):
         copy_rigs = self.query_one("#copy_rigs", Checkbox).value
         copy_irs = self.query_one("#copy_irs", Checkbox).value
         create_setlist = self.query_one("#create_setlist", Checkbox).value and copy_rigs
-        setlist_name = self.query_one("#setlist_name", Input).value.strip() or self.package.source_name
+        setlist_name = _normalize_setlist_name(self.query_one("#setlist_name", Input).value.strip()) or _normalize_setlist_name(self.package.source_name)
 
         if not copy_rigs and not copy_irs:
             self.query_one(".modal_text", Static).update("Select at least one transfer option.")
@@ -169,6 +217,10 @@ class TransferOptionsModal(ModalScreen[TransferModalResult | None]):
         if not copy_rigs:
             create_setlist.value = False
         setlist_name.disabled = not (copy_rigs and create_setlist.value)
+
+    def _editing_setlist_name(self, event: events.Key) -> bool:
+        focused = self.focused
+        return isinstance(focused, Input) and focused.id == "setlist_name" and event.key in TEXT_INPUT_NAVIGATION_KEYS
 
 
 class TransferCompleteModal(ModalScreen[None]):
@@ -256,6 +308,75 @@ class TransferCompleteModal(ModalScreen[None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class UndoSessionModal(ModalScreen[bool]):
+    CSS = """
+    UndoSessionModal {
+        align: center middle;
+    }
+
+    #undo_session_modal {
+        width: 76;
+        max-width: 90%;
+        height: auto;
+        padding: 1 2;
+        border: round #6f4f4f;
+        background: #111111;
+    }
+
+    .modal_title {
+        text-style: bold;
+        padding-bottom: 1;
+    }
+
+    .modal_text {
+        color: #d7c8c8;
+        padding-bottom: 1;
+    }
+
+    Button {
+        pointer: pointer;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: #4f1f1f;
+    }
+
+    Button:focus {
+        border: tall #e57979;
+        background: #3d1818;
+    }
+
+    #undo_session_buttons {
+        align: right middle;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, summary_lines: tuple[str, ...]) -> None:
+        super().__init__()
+        self.summary_lines = summary_lines
+
+    def compose(self) -> ComposeResult:
+        with Container(id="undo_session_modal"):
+            yield Static("Undo Current Session", classes="modal_title")
+            yield Static("\n".join(self.summary_lines), classes="modal_text")
+            with Horizontal(id="undo_session_buttons"):
+                yield Button("Cancel", id="cancel_undo")
+                yield Button("Undo Session Changes", id="confirm_undo", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm_undo":
+            self.dismiss(True)
+            return
+        self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class EjectDeviceModal(ModalScreen[None]):
@@ -566,6 +687,10 @@ class PresetSourceBrowser(App[Path | None]):
         background: #183d1f;
     }
 
+    Footer {
+        height: 1;
+    }
+
     ListView {
         height: 1fr;
         border: round #355e3b;
@@ -583,13 +708,14 @@ class PresetSourceBrowser(App[Path | None]):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("h", "open_headrush_device", "HeadRush MX5:"),
         Binding("backspace", "go_parent", "Up"),
         Binding("home", "go_roots", "Disks"),
-        Binding("space", "select_source", "Select Source"),
-        Binding("b", "backup_device", "Backup: HeadRush MX-5"),
-        Binding("e", "eject_device", "Eject: HeadRush MX-5"),
+        Binding("space", "select_source", "Select Source", show=False),
+        Binding("u", "undo_session_changes", "Undo Session"),
+        Binding("b", "backup_device", "Backup"),
         Binding("r", "refresh", "Refresh"),
+        Binding("q", "quit", "Quit"),
     ]
 
     current_path = reactive(None)
@@ -606,6 +732,7 @@ class PresetSourceBrowser(App[Path | None]):
         self.current_archive_dir = start_archive_dir
         self.selected_path: Path | None = None
         self.headrush_mount: Path | None = None
+        self.session_undo_operations: list[TransferUndoOperation] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -659,6 +786,8 @@ class PresetSourceBrowser(App[Path | None]):
         self._finish_with_selection(entry.path)
 
     def on_key(self, event: events.Key) -> None:
+        if self._input_has_focus():
+            return
         if event.key == "enter":
             return
         if event.key == "left":
@@ -706,10 +835,18 @@ class PresetSourceBrowser(App[Path | None]):
         self._refresh_headrush_status()
         self._refresh_entries()
 
+    def action_undo_session_changes(self) -> None:
+        operations = tuple(operation for operation in self.session_undo_operations if operation.has_changes())
+        if not operations:
+            self.notify("There are no transfer changes to undo in this session.", severity="information")
+            return
+
+        self.push_screen(UndoSessionModal(self._build_undo_summary(operations)), callback=self._handle_undo_confirmation)
+
     def action_backup_device(self) -> None:
         self._start_backup()
 
-    def action_eject_device(self) -> None:
+    def action_open_headrush_device(self) -> None:
         if self.headrush_mount is None:
             return
         target = resolve_transfer_target(Path.cwd(), self.headrush_mount)
@@ -821,13 +958,13 @@ class PresetSourceBrowser(App[Path | None]):
         archives = sum(1 for entry in entries if not entry.is_directory)
         if self.current_archive_path is not None:
             status_widget.update(
-                f"Folders: {dirs}\nFiles: {archives}\n\nEnter: open folder\nSpace: select current archive\n../ or Backspace: go up"
+                f"Folders: {dirs}\nFiles: {archives}\n\nEnter: open folder\n../ or Backspace: go up"
             )
         elif self.current_path is None:
             status_widget.update(f"Disks: {dirs}\n\nEnter: open disk\nHome: return here")
         else:
             status_widget.update(
-                f"Folders: {dirs}\nArchives: {archives}\n\nEnter: open folder/archive\nSpace: select current folder or highlighted archive\n../ or Backspace: go up"
+                f"Folders: {dirs}\nArchives: {archives}\n\nEnter: open folder/archive\n../ or Backspace: go up"
             )
 
         if entries:
@@ -848,7 +985,7 @@ class PresetSourceBrowser(App[Path | None]):
 
     def _format_analysis_list(self, items: tuple[str, ...], empty_message: str, note: str | None) -> Text:
         if items:
-            lines = [f"- {item}" for item in items]
+            lines = [f"- {self._format_analysis_item(item)}" for item in items]
             if note:
                 lines.extend(["", note])
             return Text("\n".join(lines))
@@ -857,6 +994,9 @@ class PresetSourceBrowser(App[Path | None]):
             return Text(note)
 
         return Text(empty_message)
+
+    def _format_analysis_item(self, item: str) -> str:
+        return PurePosixPath(item).stem or item
 
     def _finish_with_selection(self, path: Path) -> None:
         self.selected_path = path.resolve()
@@ -878,6 +1018,9 @@ class PresetSourceBrowser(App[Path | None]):
         if isinstance(item, BrowserListItem):
             return item.entry
         return None
+
+    def _input_has_focus(self) -> bool:
+        return isinstance(self.focused, Input)
 
     def _poll_system_state(self) -> None:
         previous_mount = self.headrush_mount
@@ -917,7 +1060,42 @@ class PresetSourceBrowser(App[Path | None]):
             self.notify(f"Transfer failed: {exc}", severity="error")
             return
 
+        if transfer_result.undo_operation is not None:
+            self.session_undo_operations.append(transfer_result.undo_operation)
+            self.refresh_bindings()
         self.push_screen(TransferCompleteModal(transfer_result))
+
+    def _build_undo_summary(self, operations: tuple[TransferUndoOperation, ...]) -> tuple[str, ...]:
+        created_rigs = sum(len(operation.copied_rig_paths) for operation in operations)
+        copied_irs = sum(len(operation.copied_ir_paths) for operation in operations)
+        touched_setlists = len({operation.setlist_path for operation in operations if operation.setlist_path is not None})
+        return (
+            f"Transfers in current session: {len(operations)}",
+            f"Created RIGs: {created_rigs}",
+            f"Copied IRs: {copied_irs}",
+            f"Setlists touched: {touched_setlists}",
+            "",
+            "This will delete the files created during this session and restore the previous setlist contents.",
+        )
+
+    def _handle_undo_confirmation(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+
+        operations = tuple(operation for operation in self.session_undo_operations if operation.has_changes())
+        try:
+            undo_transfer_operations(operations)
+        except ValueError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        except Exception as exc:
+            self.notify(f"Undo failed: {exc}", severity="error")
+            return
+
+        self.session_undo_operations.clear()
+        self.refresh_bindings()
+        self._refresh_entries()
+        self.notify("Current session transfer changes were undone.", severity="information")
 
     def _start_backup(self) -> None:
         if self.headrush_mount is None:
@@ -928,8 +1106,12 @@ class PresetSourceBrowser(App[Path | None]):
         self.push_screen(BackupProgressModal(self.headrush_mount, destination_root))
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        if action in {"backup_device", "eject_device"}:
+        if self._input_has_focus() and action in {"go_parent", "go_roots", "select_source"}:
+            return False
+        if action in {"backup_device", "open_headrush_device"}:
             return self.headrush_mount is not None
+        if action == "undo_session_changes":
+            return any(operation.has_changes() for operation in self.session_undo_operations)
         return super().check_action(action, parameters)
 
 

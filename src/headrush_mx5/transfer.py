@@ -85,6 +85,20 @@ class TransferResult:
     copied_irs: tuple[Path, ...]
     setlist_path: Path | None
     notes: tuple[str, ...]
+    undo_operation: TransferUndoOperation | None
+
+
+@dataclass(frozen=True)
+class TransferUndoOperation:
+    target_root: Path
+    target_kind: str
+    copied_rig_paths: tuple[Path, ...]
+    copied_ir_paths: tuple[Path, ...]
+    setlist_path: Path | None
+    previous_setlist_bytes: bytes | None
+
+    def has_changes(self) -> bool:
+        return bool(self.copied_rig_paths or self.copied_ir_paths or self.setlist_path is not None)
 
 
 def build_transfer_package(
@@ -221,13 +235,23 @@ def execute_transfer(package: TransferPackage, options: TransferOptions, target:
             next_order += 1
 
     setlist_path: Path | None = None
+    previous_setlist_bytes: bytes | None = None
     if options.create_setlist and imported_rigs:
-        setlist_path = _write_setlist_file(setlists_dir, setlist_base_name, imported_rigs)
+        setlist_path, previous_setlist_bytes = _write_setlist_file(setlists_dir, setlist_base_name, imported_rigs)
 
     if target.kind == "local":
         notes.append("Saved to the local HeadRush sample folder.")
     else:
         notes.append("Press Sync on the MX-5 after ejecting the device to finish the transfer.")
+
+    undo_operation = TransferUndoOperation(
+        target_root=target.root,
+        target_kind=target.kind,
+        copied_rig_paths=tuple(rig.target_path for rig in imported_rigs),
+        copied_ir_paths=tuple(copied_irs),
+        setlist_path=setlist_path,
+        previous_setlist_bytes=previous_setlist_bytes,
+    )
 
     return TransferResult(
         target=target,
@@ -235,6 +259,7 @@ def execute_transfer(package: TransferPackage, options: TransferOptions, target:
         copied_irs=tuple(copied_irs),
         setlist_path=setlist_path,
         notes=tuple(notes),
+        undo_operation=undo_operation if undo_operation.has_changes() else None,
     )
 
 
@@ -674,30 +699,122 @@ def _read_written_rig_identity(path: Path) -> tuple[str, str]:
     return rig_id, rig_name
 
 
-def _write_setlist_file(setlists_dir: Path, setlist_name: str, rigs: list[ImportedRig] | tuple[ImportedRig, ...]) -> Path:
+def _write_setlist_file(
+    setlists_dir: Path, setlist_name: str, rigs: list[ImportedRig] | tuple[ImportedRig, ...]
+) -> tuple[Path, bytes | None]:
     setlist_stem = (_sanitize_filename(setlist_name) or "Imported Setlist").upper()
-    setlist_filename = _allocate_unique_filename(
-        setlist_stem,
-        ".setlist",
-        {path.name.casefold() for path in setlists_dir.iterdir() if path.is_file() and not _is_ignored_source_name(path.name)},
-    )
-    setlist_path = setlists_dir / setlist_filename
-    setlist_path.write_text(
-        json.dumps(
-            {
-                "author": "UserName",
-                "created_at": int(time.time()),
-                "id": str(uuid.uuid4()),
-                "readonly": False,
-                "rig_names": [rig.rig_name for rig in rigs],
-                "rigs": [rig.rig_id for rig in rigs],
-                "version": "1.0.0",
-            },
-            separators=(",", ":"),
-        ),
-        encoding="utf-8",
-    )
-    return setlist_path
+    setlist_path = _find_existing_setlist_path(setlists_dir, setlist_stem) or (setlists_dir / f"{setlist_stem}.setlist")
+    previous_setlist_bytes = setlist_path.read_bytes() if setlist_path.exists() else None
+    existing_payload = _load_existing_setlist_payload(setlist_path)
+    merged_payload = _merge_setlist_payload(existing_payload, rigs)
+    setlist_path.write_text(json.dumps(merged_payload, separators=(",", ":")), encoding="utf-8")
+    return setlist_path, previous_setlist_bytes
+
+
+def _find_existing_setlist_path(setlists_dir: Path, setlist_stem: str) -> Path | None:
+    for path in setlists_dir.iterdir():
+        if not path.is_file() or _is_ignored_source_name(path.name) or path.suffix.lower() != ".setlist":
+            continue
+        if path.stem.casefold() == setlist_stem.casefold():
+            return path
+    return None
+
+
+def _load_existing_setlist_payload(setlist_path: Path) -> dict[str, object] | None:
+    if not setlist_path.exists():
+        return None
+    try:
+        payload = json.loads(setlist_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _merge_setlist_payload(
+    existing_payload: dict[str, object] | None,
+    rigs: list[ImportedRig] | tuple[ImportedRig, ...],
+) -> dict[str, object]:
+    payload = dict(existing_payload) if existing_payload is not None else {}
+    existing_rig_ids = payload.get("rigs")
+    existing_rig_names = payload.get("rig_names")
+
+    merged_pairs: list[tuple[str, str]] = []
+    seen_rig_ids: set[str] = set()
+
+    if isinstance(existing_rig_ids, list) and isinstance(existing_rig_names, list):
+        for rig_id, rig_name in zip(existing_rig_ids, existing_rig_names):
+            if not isinstance(rig_id, str) or not rig_id or not isinstance(rig_name, str):
+                continue
+            if rig_id in seen_rig_ids:
+                continue
+            merged_pairs.append((rig_id, rig_name))
+            seen_rig_ids.add(rig_id)
+
+    for rig in rigs:
+        if rig.rig_id in seen_rig_ids:
+            continue
+        merged_pairs.append((rig.rig_id, rig.rig_name))
+        seen_rig_ids.add(rig.rig_id)
+
+    payload["author"] = payload.get("author") if isinstance(payload.get("author"), str) and payload.get("author") else "UserName"
+    payload["created_at"] = payload.get("created_at") if type(payload.get("created_at")) is int else int(time.time())
+    payload["id"] = payload.get("id") if isinstance(payload.get("id"), str) and payload.get("id") else str(uuid.uuid4())
+    payload["readonly"] = payload.get("readonly") if isinstance(payload.get("readonly"), bool) else False
+    payload["rig_names"] = [rig_name for _, rig_name in merged_pairs]
+    payload["rigs"] = [rig_id for rig_id, _ in merged_pairs]
+    payload["version"] = payload.get("version") if isinstance(payload.get("version"), str) and payload.get("version") else "1.0.0"
+    return payload
+
+
+def undo_transfer_operations(operations: tuple[TransferUndoOperation, ...] | list[TransferUndoOperation]) -> None:
+    filtered_operations = tuple(operation for operation in operations if operation.has_changes())
+    if not filtered_operations:
+        return
+
+    _validate_undo_operations(filtered_operations)
+    for operation in reversed(filtered_operations):
+        _undo_transfer_operation(operation)
+
+
+def _validate_undo_operations(operations: tuple[TransferUndoOperation, ...]) -> None:
+    for operation in operations:
+        if operation.target_kind == "device" and not operation.target_root.exists():
+            raise ValueError("Reconnect the HeadRush device before undoing this session.")
+        if operation.setlist_path is not None and operation.previous_setlist_bytes is not None and not operation.setlist_path.parent.exists():
+            raise ValueError("The target setlist folder is missing, so the session cannot be undone.")
+
+
+def _undo_transfer_operation(operation: TransferUndoOperation) -> None:
+    for rig_path in operation.copied_rig_paths:
+        if rig_path.exists():
+            rig_path.unlink()
+
+    impulse_root_dir = operation.target_root / IRS_DIR.parent
+    default_ir_dir = operation.target_root / IRS_DIR
+    for ir_path in operation.copied_ir_paths:
+        if ir_path.exists():
+            ir_path.unlink()
+        _remove_empty_parent_dirs(ir_path.parent, (impulse_root_dir, default_ir_dir))
+
+    if operation.setlist_path is None:
+        return
+    if operation.previous_setlist_bytes is None:
+        if operation.setlist_path.exists():
+            operation.setlist_path.unlink()
+        return
+
+    operation.setlist_path.parent.mkdir(parents=True, exist_ok=True)
+    operation.setlist_path.write_bytes(operation.previous_setlist_bytes)
+
+
+def _remove_empty_parent_dirs(path: Path, stop_dirs: tuple[Path, ...]) -> None:
+    current = path
+    while current not in stop_dirs and current.is_dir():
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
 
 
 def _is_ignored_source_name(name: str) -> bool:

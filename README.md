@@ -64,7 +64,7 @@ By default the dialog enables:
 - copying `.wav` IR files;
 - creating a setlist for the imported presets.
 
-The default setlist name is taken from the current folder or archive name.
+The default setlist name is taken from the current folder or archive name and is shown in uppercase in the dialog.
 
 ![Transfer options modal](docs/images/transfer-options-modal.png)
 
@@ -81,6 +81,10 @@ When file transfer is finished, use `Eject: HeadRush MX-5` from the footer.
 Do not forget to press `Sync` on the MX-5 after ejecting the drive. This finalizes the synchronization on the hardware side.
 
 ![Eject modal](docs/images/eject-modal.png)
+
+### 5. Undo the current session
+
+Use `Undo Session` from the footer to remove the presets, IRs, and setlist changes created by transfers during the current app session. The app asks for confirmation before restoring the previous setlist contents and deleting the created files.
 
 ## Transfer Rules
 
@@ -106,6 +110,7 @@ Do not forget to press `Sync` on the MX-5 after ejecting the drive. This finaliz
 - Target folder: `HeadRush/Setlists`
 - Setlists are saved as `.setlist` JSON files
 - A generated setlist contains the imported rig IDs and rig names
+- If a setlist with the same name already exists, new imported rigs are appended to it instead of creating a replacement copy
 
 ## HeadRush Device Detection
 

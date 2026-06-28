@@ -30,6 +30,7 @@ from headrush_mx5.transfer import (
     eject_transfer_target,
     execute_transfer,
     resolve_transfer_target,
+    undo_transfer_operations,
 )
 
 
@@ -400,6 +401,193 @@ class BrowserTests(unittest.TestCase):
 
             copied_names = [rig.target_path.stem for rig in result.copied_rigs]
             self.assertEqual(copied_names, ["300 CT-ACDC CLEAN", "301 CT-ACDC LEAD"])
+
+    def test_execute_transfer_appends_rigs_to_existing_setlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Bon Jovi Pack"
+            (source / "Rigs").mkdir(parents=True)
+            (source / "Rigs" / "Lead.rig").write_text(
+                json.dumps(
+                    {
+                        "author": "UserName",
+                        "color": 9,
+                        "content": json.dumps(
+                            {
+                                "data": {
+                                    "Patch": {
+                                        "children": {
+                                            "Rig": {"children": {"PresetName": {"string": "Lead"}}},
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                        "created_at": 1,
+                        "id": "new-rig-id",
+                        "order": 1,
+                        "prog_num": -1,
+                        "readonly": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            target_root = root / "HeadRush"
+            (target_root / "Rigs").mkdir(parents=True)
+            (target_root / "Setlists").mkdir()
+            (target_root / "Impulse Responses" / "USER").mkdir(parents=True)
+            existing_setlist_path = target_root / "Setlists" / "BON JOVI.setlist"
+            existing_setlist_path.write_text(
+                json.dumps(
+                    {
+                        "author": "Existing User",
+                        "created_at": 123,
+                        "id": "existing-setlist-id",
+                        "readonly": False,
+                        "rig_names": ["300 EXISTING"],
+                        "rigs": ["existing-rig-id"],
+                        "version": "1.0.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            package = build_transfer_package(source, None, ARCHIVE_ROOT)
+            result = execute_transfer(
+                package,
+                TransferOptions(copy_rigs=True, copy_irs=False, create_setlist=True, setlist_name="Bon Jovi"),
+                resolve_transfer_target(root, None),
+            )
+
+            self.assertEqual(result.setlist_path, existing_setlist_path)
+            setlist_payload = json.loads(existing_setlist_path.read_text(encoding="utf-8"))
+            self.assertEqual(setlist_payload["author"], "Existing User")
+            self.assertEqual(setlist_payload["created_at"], 123)
+            self.assertEqual(setlist_payload["id"], "existing-setlist-id")
+            self.assertEqual(
+                setlist_payload["rig_names"],
+                ["300 EXISTING", result.copied_rigs[0].rig_name],
+            )
+            self.assertEqual(
+                setlist_payload["rigs"],
+                ["existing-rig-id", result.copied_rigs[0].rig_id],
+            )
+
+    def test_undo_transfer_removes_created_files_and_new_setlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Bon Jovi Pack"
+            (source / "Rigs").mkdir(parents=True)
+            (source / "IRs").mkdir()
+            (source / "Rigs" / "Lead.rig").write_text(
+                json.dumps(
+                    {
+                        "author": "UserName",
+                        "color": 9,
+                        "content": json.dumps(
+                            {
+                                "data": {
+                                    "Patch": {
+                                        "children": {
+                                            "Rig": {"children": {"PresetName": {"string": "Lead"}}},
+                                            "IR": {"children": {"IR": {"string": "[directory]([USER])[name](Cab)"}}},
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                        "created_at": 1,
+                        "id": "new-rig-id",
+                        "order": 1,
+                        "prog_num": -1,
+                        "readonly": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (source / "IRs" / "Cab.wav").write_text("wav-data", encoding="utf-8")
+
+            target_root = root / "HeadRush"
+            (target_root / "Rigs").mkdir(parents=True)
+            (target_root / "Setlists").mkdir()
+            (target_root / "Impulse Responses" / "USER").mkdir(parents=True)
+
+            package = build_transfer_package(source, None, ARCHIVE_ROOT)
+            result = execute_transfer(
+                package,
+                TransferOptions(copy_rigs=True, copy_irs=True, create_setlist=True, setlist_name="Bon Jovi"),
+                resolve_transfer_target(root, None),
+            )
+
+            self.assertIsNotNone(result.undo_operation)
+            undo_transfer_operations((result.undo_operation,))
+
+            self.assertFalse(result.copied_rigs[0].target_path.exists())
+            self.assertFalse(result.copied_irs[0].exists())
+            self.assertIsNotNone(result.setlist_path)
+            self.assertFalse(result.setlist_path.exists())
+
+    def test_undo_transfer_restores_existing_setlist_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Bon Jovi Pack"
+            (source / "Rigs").mkdir(parents=True)
+            (source / "Rigs" / "Lead.rig").write_text(
+                json.dumps(
+                    {
+                        "author": "UserName",
+                        "color": 9,
+                        "content": json.dumps(
+                            {
+                                "data": {
+                                    "Patch": {
+                                        "children": {
+                                            "Rig": {"children": {"PresetName": {"string": "Lead"}}},
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                        "created_at": 1,
+                        "id": "new-rig-id",
+                        "order": 1,
+                        "prog_num": -1,
+                        "readonly": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            target_root = root / "HeadRush"
+            (target_root / "Rigs").mkdir(parents=True)
+            (target_root / "Setlists").mkdir()
+            (target_root / "Impulse Responses" / "USER").mkdir(parents=True)
+            existing_setlist_path = target_root / "Setlists" / "BON JOVI.setlist"
+            original_payload = {
+                "author": "Existing User",
+                "created_at": 123,
+                "id": "existing-setlist-id",
+                "readonly": False,
+                "rig_names": ["300 EXISTING"],
+                "rigs": ["existing-rig-id"],
+                "version": "1.0.0",
+            }
+            existing_setlist_path.write_text(json.dumps(original_payload), encoding="utf-8")
+
+            package = build_transfer_package(source, None, ARCHIVE_ROOT)
+            result = execute_transfer(
+                package,
+                TransferOptions(copy_rigs=True, copy_irs=False, create_setlist=True, setlist_name="Bon Jovi"),
+                resolve_transfer_target(root, None),
+            )
+
+            self.assertIsNotNone(result.undo_operation)
+            undo_transfer_operations((result.undo_operation,))
+
+            restored_payload = json.loads(existing_setlist_path.read_text(encoding="utf-8"))
+            self.assertEqual(restored_payload, original_payload)
+            self.assertFalse(result.copied_rigs[0].target_path.exists())
 
     def test_execute_transfer_skips_existing_ir_with_same_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
