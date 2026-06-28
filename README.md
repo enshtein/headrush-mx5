@@ -10,8 +10,10 @@ The application can:
 - analyze `.rig` presets and `.wav` impulse responses;
 - transfer presets and IRs to a HeadRush MX-5 target structure;
 - create a `.setlist` file for imported presets;
+- append imported presets to an existing setlist with the same name;
 - detect a mounted `HeadRush` USB Transfer volume;
 - back up a connected HeadRush device into the local project `HeadRush/` folder;
+- undo transfer changes created during the current app session;
 - eject the connected device and remind you to press `Sync` on the hardware.
 
 ## Quick Start
@@ -40,18 +42,20 @@ The launch scripts create a local `.venv`, install dependencies from `requiremen
 - `Space` - select the current folder, or select the highlighted archive source
 - `Backspace` - go up one level
 - `Home` - return to the disks/roots screen
+- `h` - open the `HeadRush MX5:` device action when the USB Transfer volume is connected
+- `u` - undo transfer changes created in the current app session
 - `b` - back up the connected HeadRush device
-- `e` - eject the connected HeadRush device
 - `r` - refresh the current view
 - `q` - quit
 
-The `Transfer`, `Backup`, and `Eject` actions are shown only when a `HeadRush` USB Transfer volume is connected.
+When the device is connected, the footer starts with `HeadRush MX5:` and opens the device action modal for eject and sync guidance.
 
 ## Workflow
 
 ### 1. Browse a preset pack and inspect its content
 
-Open a folder or archive and review the detected presets and impulse responses in the left panel.
+Open a folder or archive and review the detected presets and impulse responses in the left panel.  
+The analysis lists show short preset and IR names without long folder paths, which makes pack inspection easier before transfer.
 
 ![Archive browser and analysis](docs/images/archive-browser-and-analysis.png)
 
@@ -64,19 +68,19 @@ By default the dialog enables:
 - copying `.wav` IR files;
 - creating a setlist for the imported presets.
 
-The default setlist name is taken from the current folder or archive name and is shown in uppercase in the dialog.
+The default setlist name is taken from the current folder or archive name, shown in uppercase in the dialog, and stays uppercase while you edit it.
 
 ![Transfer options modal](docs/images/transfer-options-modal.png)
 
 ### 3. Back up the connected device
 
-Use `Backup: HeadRush MX-5` from the footer to mirror the currently connected device into the local project `HeadRush/` folder.
+Use `Backup` from the footer to mirror the currently connected device into the local project `HeadRush/` folder.
 
 ![Backup modal](docs/images/backup-modal.png)
 
 ### 4. Eject and sync
 
-When file transfer is finished, use `Eject: HeadRush MX-5` from the footer.
+When the `HeadRush` USB Transfer volume is connected, use `HeadRush MX5:` from the footer to open the device action modal. From there you can eject the device on the computer and finish the workflow on hardware.
 
 Do not forget to press `Sync` on the MX-5 after ejecting the drive. This finalizes the synchronization on the hardware side.
 
@@ -85,6 +89,8 @@ Do not forget to press `Sync` on the MX-5 after ejecting the drive. This finaliz
 ### 5. Undo the current session
 
 Use `Undo Session` from the footer to remove the presets, IRs, and setlist changes created by transfers during the current app session. The app asks for confirmation before restoring the previous setlist contents and deleting the created files.
+
+![Undo session modal](docs/images/undo-session-modal.png)
 
 ## Transfer Rules
 
@@ -110,6 +116,7 @@ Use `Undo Session` from the footer to remove the presets, IRs, and setlist chang
 - Target folder: `HeadRush/Setlists`
 - Setlists are saved as `.setlist` JSON files
 - A generated setlist contains the imported rig IDs and rig names
+- The setlist name is normalized to uppercase before saving
 - If a setlist with the same name already exists, new imported rigs are appended to it instead of creating a replacement copy
 
 ## HeadRush Device Detection
@@ -117,7 +124,7 @@ Use `Undo Session` from the footer to remove the presets, IRs, and setlist chang
 - The app looks for a mounted volume named `HeadRush`
 - On macOS and Linux, it checks mounted volumes such as `/Volumes/HeadRush`
 - On Windows, it checks drive volume labels
-- When the device is connected, footer actions for `Transfer`, `Backup`, and `Eject` become available
+- When the device is connected, the footer exposes `HeadRush MX5:` and `Backup`
 
 ## State Persistence
 
